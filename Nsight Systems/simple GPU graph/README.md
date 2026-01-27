@@ -10,7 +10,7 @@
 
 ## Understanding the Profile
 
-![Nsight Systems Profile](output_1.png)
+![Nsight Systems Profile](output1.png)
 
 ### Timeline Segments Explained
 
