@@ -36,4 +36,12 @@ The profile will show:
 - **CUDA API calls**: Memory allocations, kernel launches
 - **CUDA kernels**: Individual GPU operations during inference
 
+### Example Outputs
+
+![Nsight Systems Timeline Overview](output_1.png)
+*Timeline showing NVTX ranges, CUDA API calls, and GPU activity*
+
+![Nsight Systems Kernel Details](output_2.png)
+*Detailed view of CUDA kernels and GPU utilization*
+
 **Note:** Uses vLLM 0.6.3 which is compatible with CUDA 12.0
