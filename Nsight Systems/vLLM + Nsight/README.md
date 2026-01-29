@@ -76,10 +76,26 @@ generates:
 shows nvtx ranges, cuda api calls, gpu kernels, and memory transfers (M2D during load, D2D during inference)
 
 **available nsight profiles:**
-- `profile_facebook_opt-125m.nsys-rep` - [output_opt125m.png](output_opt125m.png)
-- `profile_facebook_opt-350m.nsys-rep` - [output_opt350m.png](output_opt350m.png)
-- `profile_facebook_opt-1.3b.nsys-rep` - [output_opt1.3b.png](output_opt1.3b.png)
-- `profile_gpt2-large-774m.nsys-rep` - [output_gpt2-large-774m.png](output_gpt2-large-774m.png)
+
+### facebook/opt-125m
+`profile_facebook_opt-125m.nsys-rep`
+
+![opt-125m nsight output](output_opt125m.png)
+
+### facebook/opt-350m
+`profile_facebook_opt-350m.nsys-rep`
+
+![opt-350m nsight output](output_opt350m.png)
+
+### facebook/opt-1.3b
+`profile_facebook_opt-1.3b.nsys-rep`
+
+![opt-1.3b nsight output](output_opt1.3b.png)
+
+### gpt2-large-774m
+`profile_gpt2-large-774m.nsys-rep`
+
+![gpt2-large-774m nsight output](output_gpt2-large-774m.png)
 
 ## What to expect in Nsight Systems
 
