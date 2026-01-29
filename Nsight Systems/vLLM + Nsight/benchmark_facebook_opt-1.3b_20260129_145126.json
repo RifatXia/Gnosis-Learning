@@ -1,0 +1,33 @@
+{
+  "model_name": "facebook/opt-1.3b",
+  "timestamp": "2026-01-29T14:49:10.375723",
+  "model_properties": {
+    "total_parameters": 1315753984,
+    "num_layers": 24,
+    "hidden_size": 2048,
+    "vocab_size": 50272,
+    "model_size_mb": 3070.6484375
+  },
+  "inference_metrics": {
+    "model_load_time_seconds": 129.0217,
+    "total_inference_time_seconds": 6.669,
+    "tokens_per_second": 14.99,
+    "num_prompts": 2,
+    "total_input_tokens": 12,
+    "total_output_tokens": 100,
+    "average_tokens_per_prompt": 50.0
+  },
+  "gpu_metrics": {
+    "gpu_name": "NVIDIA GeForce GTX 1650",
+    "gpu_memory_total_mb": 3714.69,
+    "gpu_memory_allocated_mb": 3070.65,
+    "gpu_memory_reserved_mb": 3188.0,
+    "gpu_memory_utilization_percent": 82.66,
+    "peak_memory_allocated_mb": 3075.84
+  },
+  "nsight_metrics": {
+    "profile_file": "profile_facebook_opt-1.3b.nsys-rep",
+    "profile_name": "profile_facebook_opt-1.3b",
+    "notes": "M2D (host-to-device) transfers occur during model loading. D2D (device-to-device) and kernel execution during inference. KV cache usage tracked via GPU block allocation."
+  }
+}
