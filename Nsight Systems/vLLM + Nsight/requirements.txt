@@ -3,3 +3,6 @@ torch
 transformers
 tabulate
 matplotlib
+nvtx
+datasets
+nvidia-ml-py

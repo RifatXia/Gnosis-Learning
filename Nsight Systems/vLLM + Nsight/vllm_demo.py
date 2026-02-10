@@ -36,6 +36,7 @@ initial_memory = torch.cuda.memory_allocated() / (1024**2)
 # load model on gpu
 nvtx.range_push("model_initialization")
 model_load_start = time.time()
+# loads the model into GPU memory
 llm = LLM(model=model_name, gpu_memory_utilization=gpu_memory_utilization)
 model_load_time = time.time() - model_load_start
 nvtx.range_pop()
@@ -69,6 +70,9 @@ benchmark["model_properties"] = {
 }
 
 # sampling parameters
+# temperature controls the creativity/randomness
+# top_p nucleus sampling
+# max_tokens: max number of tokens per prompt
 sampling_params = SamplingParams(temperature=0.8, top_p=0.95, max_tokens=50)
 
 # prompts
@@ -80,6 +84,8 @@ prompts = [
 # run inference on gpu
 nvtx.range_push("inference")
 inference_start = time.time()
+# run the inference using the prompts and sampling_params
+# returns generated text and metadata
 outputs = llm.generate(prompts, sampling_params)
 inference_time = time.time() - inference_start
 nvtx.range_pop()

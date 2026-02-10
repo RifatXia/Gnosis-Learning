@@ -1,0 +1,8 @@
+vllm==0.6.3
+torch
+transformers
+tabulate
+matplotlib
+nvtx
+datasets
+nvidia-ml-py

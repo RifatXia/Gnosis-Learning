@@ -1,0 +1,39 @@
+{
+  "model_name": "facebook/opt-125m",
+  "timestamp": "2026-02-05T15:13:18.981158",
+  "model_properties": {
+    "total_parameters": 125263872,
+    "num_layers": 12,
+    "hidden_size": 768,
+    "vocab_size": 50272,
+    "model_size_mb": 3171.19091796875
+  },
+  "inference_metrics": {
+    "model_load_time_seconds": 27.5241,
+    "total_inference_time_seconds": 1.1264,
+    "tokens_per_second": 397.73,
+    "num_prompts": 10,
+    "total_input_tokens": 129,
+    "total_output_tokens": 448,
+    "average_tokens_per_prompt": 44.8
+  },
+  "gpu_metrics": {
+    "gpu_name": "NVIDIA GeForce GTX 1650",
+    "gpu_memory_total_mb": 3714.69,
+    "gpu_memory_allocated_mb": 3171.19,
+    "gpu_memory_reserved_mb": 3256.0,
+    "gpu_memory_utilization_percent": 85.37,
+    "peak_memory_allocated_mb": 3195.63,
+    "kv_cache_total_mb": 2900.25,
+    "kv_cache_used_mb": 0.0,
+    "kv_cache_num_blocks": 5156,
+    "kv_cache_num_free_blocks": 5156,
+    "model_only_memory_mb": 270.94,
+    "model_only_utilization_percent": 7.29
+  },
+  "nsight_metrics": {
+    "profile_file": "profile_facebook_opt-125m_trivia.nsys-rep",
+    "profile_name": "profile_facebook_opt-125m_trivia",
+    "notes": "M2D (host-to-device) transfers occur during model loading. D2D (device-to-device) and kernel execution during inference. KV cache usage tracked via GPU block allocation."
+  }
+}

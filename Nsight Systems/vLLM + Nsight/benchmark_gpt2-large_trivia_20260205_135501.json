@@ -1,0 +1,33 @@
+{
+  "model_name": "gpt2-large",
+  "timestamp": "2026-02-05T13:53:38.820628",
+  "model_properties": {
+    "total_parameters": 774090240,
+    "num_layers": 36,
+    "hidden_size": 1280,
+    "vocab_size": 50257,
+    "model_size_mb": 3015.11376953125
+  },
+  "inference_metrics": {
+    "model_load_time_seconds": 77.3533,
+    "total_inference_time_seconds": 4.9008,
+    "tokens_per_second": 102.02,
+    "num_prompts": 10,
+    "total_input_tokens": 119,
+    "total_output_tokens": 500,
+    "average_tokens_per_prompt": 50.0
+  },
+  "gpu_metrics": {
+    "gpu_name": "NVIDIA GeForce GTX 1650",
+    "gpu_memory_total_mb": 3714.69,
+    "gpu_memory_allocated_mb": 3015.11,
+    "gpu_memory_reserved_mb": 3230.0,
+    "gpu_memory_utilization_percent": 81.17,
+    "peak_memory_allocated_mb": 3039.97
+  },
+  "nsight_metrics": {
+    "profile_file": "profile_gpt2-large_trivia.nsys-rep",
+    "profile_name": "profile_gpt2-large_trivia",
+    "notes": "M2D (host-to-device) transfers occur during model loading. D2D (device-to-device) and kernel execution during inference. KV cache usage tracked via GPU block allocation."
+  }
+}
