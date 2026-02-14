@@ -6,8 +6,8 @@ directly (no HTTP server). KV cache is explicitly cleared between trials to
 prevent contamination.
 
 Flow (repeated NUM_TRIALS times):
-  1. Clear cache -> Warmup [A,B] -> Ask [A,B,Q] (cache hit) -> Clear cache
-  2. Clear cache -> Warmup [A,B] -> Ask [B,Q] (cache miss) -> Clear cache
+  1. Clear cache -> Warmup [A,B] -> Ask [A,B,Q] (cache hit)
+  2. Clear cache -> Warmup [A,B] -> Ask [B,Q] (cache miss)
 
 This gives 20 warmups total (10 for hit, 10 for miss) with std deviation.
 
