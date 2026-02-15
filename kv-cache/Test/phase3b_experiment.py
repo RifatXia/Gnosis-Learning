@@ -2,8 +2,9 @@
 Phase 3b: Prefix Cache Invalidation Cost — llama-cpp-python Direct API
 
 Measures TTFT via single-token generation using the llama-cpp-python Llama class
-directly (no HTTP server). KV cache is explicitly cleared between trials to
-prevent contamination.
+directly (no HTTP server). KV cache is explicitly cleared between trials using
+both llm.reset() (resets token counter) and llm._ctx.kv_cache_clear() (clears
+actual KV cache data from GPU).
 
 Flow (repeated NUM_TRIALS times):
   1. Clear cache -> Warmup [A,B] -> Ask [A,B,Q] (cache hit)
@@ -15,14 +16,16 @@ Compares:
   T2 (cache hit)  — prompt with full [A, B, Q] prefix (matches warmed cache)
   T3 (cache miss)  — prompt with [B, Q] only (A removed, prefix changed)
 
-Outputs results to results_phase3b_a{A}_b{B}.json.
+Outputs:
+  results_phase3b_a{A}_b{B}.csv  — per-trial metrics (20 rows)
+  prompts_phase3b_a{A}_b{B}.csv  — prompt text, token counts, sample outputs
 """
 
 import argparse
+import csv
+import os
 import time
-import json
 import statistics
-from datetime import datetime
 from typing import List, Dict
 
 from llama_cpp import Llama
@@ -63,8 +66,9 @@ def build_prompt_from_messages(messages: List[Dict[str, str]]) -> str:
 
 
 def clear_kv_cache(llm: Llama):
-    """Clear the KV cache to ensure no contamination between trials."""
-    llm.reset()
+    """Fully clear the KV cache — reset state AND clear cache memory."""
+    llm.reset()                  # reset n_tokens counter to 0
+    llm._ctx.kv_cache_clear()    # actually clear KV cache data from GPU
 
 
 def compute_stats(trials: List[Dict]) -> Dict:
@@ -133,7 +137,7 @@ def build_miss_messages(context_b: str, query: str) -> List[Dict[str, str]]:
 def run_trial(
     llm: Llama,
     query_prompt: str,
-) -> Dict[str, float]:
+) -> Dict:
     """
     Single trial — pure measurement, no warmup or cache manipulation.
 
@@ -141,6 +145,9 @@ def run_trial(
       1. Measure TTFT (1-token generation)
       2. Sleep 500ms
       3. Measure throughput (50-token generation)
+
+    Returns dict with ttft_ms, total_time_ms, throughput, prompt_tokens,
+    completion_tokens, finish_reason.
     """
     # Step 1: TTFT measurement (1-token generation)
     start = time.perf_counter()
@@ -158,13 +165,59 @@ def run_trial(
     completion_tokens = full_output["usage"]["completion_tokens"]
     throughput = completion_tokens / (total_time_ms / 1000) if total_time_ms > 0 else 0
 
+    # Determine finish_reason from the output
+    finish_reason = "length"
+    if "choices" in full_output and full_output["choices"]:
+        finish_reason = full_output["choices"][0].get("finish_reason", "length")
+
+    # Extract generated text for sample logging
+    generated_text = ""
+    if "choices" in full_output and full_output["choices"]:
+        generated_text = full_output["choices"][0].get("text", "")
+
     return {
         "ttft_ms": ttft_ms,
         "total_time_ms": total_time_ms,
         "throughput": throughput,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
+        "finish_reason": finish_reason,
+        "generated_text": generated_text,
     }
+
+
+# ---------------------------------------------------------------------------
+# CSV writers
+# ---------------------------------------------------------------------------
+
+RESULTS_COLUMNS = [
+    "trial", "condition", "warmup_time_ms", "ttft_ms", "total_time_ms",
+    "throughput_tok_s", "prompt_tokens", "completion_tokens", "finish_reason",
+]
+
+PROMPTS_COLUMNS = [
+    "prompt_name", "token_count", "prompt_text", "sample_output",
+]
+
+
+def write_results_csv(path: str, rows: List[Dict]):
+    """Write per-trial results CSV with flush+fsync."""
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=RESULTS_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def write_prompts_csv(path: str, rows: List[Dict]):
+    """Write prompts CSV with flush+fsync."""
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=PROMPTS_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+        f.flush()
+        os.fsync(f.fileno())
 
 
 # ---------------------------------------------------------------------------
@@ -196,19 +249,38 @@ def run_experiment():
     hit_prompt = build_prompt_from_messages(build_hit_messages(context_a, context_b, query))
     miss_prompt = build_prompt_from_messages(build_miss_messages(context_b, query))
 
+    # Tokenize prompts to get exact token counts
+    warmup_token_count = len(llm.tokenize(warmup_prompt.encode()))
+    hit_token_count = len(llm.tokenize(hit_prompt.encode()))
+    miss_token_count = len(llm.tokenize(miss_prompt.encode()))
+
     print(f"Context A: ~{CONTEXT_SIZE_A} tokens")
     print(f"Context B: ~{CONTEXT_SIZE_B} tokens")
     print(f"Max output tokens: {MAX_OUTPUT_TOKENS}")
-    print(f"Trials: {NUM_TRIALS} per condition (separate loops)")
-    print(f"Total warmups: {NUM_TRIALS * 2} (20 warmups for std deviation)")
+    print(f"Trials: {NUM_TRIALS} per condition")
+    print(f"Total warmups: {NUM_TRIALS * 2} (for std deviation)")
+    print()
+    print("Prompt token counts:")
+    print(f"  warmup: {warmup_token_count} tokens")
+    print(f"  hit:    {hit_token_count} tokens")
+    print(f"  miss:   {miss_token_count} tokens")
     print()
 
-    # Storage for results
+    # Storage for results (all in memory — no I/O during timing)
     cache_hit_results: List[Dict] = []
     cache_miss_results: List[Dict] = []
-    all_warmup_times: List[float] = []
+    hit_warmup_times: List[float] = []
+    miss_warmup_times: List[float] = []
+    csv_rows: List[Dict] = []
 
-    # ---- CACHE HIT trials (separate loop) ----
+    # Sample outputs for prompts CSV (captured from first trial)
+    sample_warmup_output = ""
+    sample_hit_output = ""
+    sample_miss_output = ""
+
+    eos_warnings: List[str] = []
+
+    # ---- CACHE HIT trials ----
     print("Running CACHE HIT trials...")
     print("-" * 80)
     for trial_idx in range(NUM_TRIALS):
@@ -217,9 +289,13 @@ def run_experiment():
 
         # Warmup with [A,B]
         warmup_start = time.perf_counter()
-        llm(warmup_prompt, max_tokens=WARMUP_TOKENS, temperature=0.0)
+        warmup_output = llm(warmup_prompt, max_tokens=WARMUP_TOKENS, temperature=0.0)
         warmup_time = (time.perf_counter() - warmup_start) * 1000
-        all_warmup_times.append(warmup_time)
+        hit_warmup_times.append(warmup_time)
+
+        # Capture sample warmup output from first trial
+        if trial_idx == 0 and "choices" in warmup_output and warmup_output["choices"]:
+            sample_warmup_output = warmup_output["choices"][0].get("text", "")
 
         # Settle
         time.sleep(0.5)
@@ -227,16 +303,44 @@ def run_experiment():
         # Measure cache hit
         hit_result = run_trial(llm, hit_prompt)
         cache_hit_results.append(hit_result)
+
+        # Capture sample hit output from first trial
+        if trial_idx == 0:
+            sample_hit_output = hit_result["generated_text"]
+
+        # Check for early EOS
+        if hit_result["completion_tokens"] < MAX_OUTPUT_TOKENS:
+            warn = (f"  WARNING: Trial {trial_idx + 1} (hit) — EOS hit early: "
+                    f"completion_tokens={hit_result['completion_tokens']} < {MAX_OUTPUT_TOKENS}, "
+                    f"finish_reason={hit_result['finish_reason']}")
+            eos_warnings.append(warn)
+            print(warn)
+
+        # Store CSV row
+        csv_rows.append({
+            "trial": trial_idx + 1,
+            "condition": "hit",
+            "warmup_time_ms": f"{warmup_time:.4f}",
+            "ttft_ms": f"{hit_result['ttft_ms']:.4f}",
+            "total_time_ms": f"{hit_result['total_time_ms']:.4f}",
+            "throughput_tok_s": f"{hit_result['throughput']:.4f}",
+            "prompt_tokens": hit_result["prompt_tokens"],
+            "completion_tokens": hit_result["completion_tokens"],
+            "finish_reason": hit_result["finish_reason"],
+        })
+
         print(
             f"  Trial {trial_idx + 1}: Warmup={warmup_time:.2f}ms  "
             f"TTFT={hit_result['ttft_ms']:.2f}ms  "
             f"Total={hit_result['total_time_ms']:.2f}ms  "
-            f"Throughput={hit_result['throughput']:.2f} tok/s"
+            f"Throughput={hit_result['throughput']:.2f} tok/s  "
+            f"Tokens={hit_result['completion_tokens']}/{MAX_OUTPUT_TOKENS}  "
+            f"Finish={hit_result['finish_reason']}"
         )
 
     print()
 
-    # ---- CACHE MISS trials (separate loop) ----
+    # ---- CACHE MISS trials ----
     print("Running CACHE MISS trials...")
     print("-" * 80)
     for trial_idx in range(NUM_TRIALS):
@@ -247,7 +351,7 @@ def run_experiment():
         warmup_start = time.perf_counter()
         llm(warmup_prompt, max_tokens=WARMUP_TOKENS, temperature=0.0)
         warmup_time = (time.perf_counter() - warmup_start) * 1000
-        all_warmup_times.append(warmup_time)
+        miss_warmup_times.append(warmup_time)
 
         # Settle
         time.sleep(0.5)
@@ -255,19 +359,47 @@ def run_experiment():
         # Measure cache miss
         miss_result = run_trial(llm, miss_prompt)
         cache_miss_results.append(miss_result)
+
+        # Capture sample miss output from first trial
+        if trial_idx == 0:
+            sample_miss_output = miss_result["generated_text"]
+
+        # Check for early EOS
+        if miss_result["completion_tokens"] < MAX_OUTPUT_TOKENS:
+            warn = (f"  WARNING: Trial {trial_idx + 1} (miss) — EOS hit early: "
+                    f"completion_tokens={miss_result['completion_tokens']} < {MAX_OUTPUT_TOKENS}, "
+                    f"finish_reason={miss_result['finish_reason']}")
+            eos_warnings.append(warn)
+            print(warn)
+
+        # Store CSV row
+        csv_rows.append({
+            "trial": trial_idx + 1,
+            "condition": "miss",
+            "warmup_time_ms": f"{warmup_time:.4f}",
+            "ttft_ms": f"{miss_result['ttft_ms']:.4f}",
+            "total_time_ms": f"{miss_result['total_time_ms']:.4f}",
+            "throughput_tok_s": f"{miss_result['throughput']:.4f}",
+            "prompt_tokens": miss_result["prompt_tokens"],
+            "completion_tokens": miss_result["completion_tokens"],
+            "finish_reason": miss_result["finish_reason"],
+        })
+
         print(
             f"  Trial {trial_idx + 1}: Warmup={warmup_time:.2f}ms  "
             f"TTFT={miss_result['ttft_ms']:.2f}ms  "
             f"Total={miss_result['total_time_ms']:.2f}ms  "
-            f"Throughput={miss_result['throughput']:.2f} tok/s"
+            f"Throughput={miss_result['throughput']:.2f} tok/s  "
+            f"Tokens={miss_result['completion_tokens']}/{MAX_OUTPUT_TOKENS}  "
+            f"Finish={miss_result['finish_reason']}"
         )
-
 
     print()
 
     # ---- Statistics ----
     hit_stats = compute_stats(cache_hit_results)
     miss_stats = compute_stats(cache_miss_results)
+    all_warmup_times = hit_warmup_times + miss_warmup_times
     warmup_stats = compute_warmup_stats(all_warmup_times)
 
     # Inject warmup stats into both hit and miss stats for plot_results.py compatibility
@@ -308,38 +440,44 @@ def run_experiment():
     print(f"  Prompt tokens: {miss_stats['prompt_tokens']}")
     print()
     print(f"TTFT Degradation: {ttft_degradation:.1f}% slower on cache miss")
+
+    if eos_warnings:
+        print()
+        print(f"EOS WARNINGS ({len(eos_warnings)} total):")
+        for w in eos_warnings:
+            print(w)
+
     print("=" * 80)
 
-    # ---- Save JSON ----
-    output = {
-        "phase": "phase3b_python_api",
-        "model": MODEL_NAME,
-        "timestamp": datetime.now().isoformat(),
-        "config": {
-            "context_size_a": CONTEXT_SIZE_A,
-            "context_size_b": CONTEXT_SIZE_B,
-            "max_output_tokens": MAX_OUTPUT_TOKENS,
-            "num_trials": NUM_TRIALS,
-        },
-        "warmup": {
-            "times_ms": all_warmup_times,
-            "stats": warmup_stats,
-        },
-        "cache_hit": {
-            "trials": cache_hit_results,
-            "stats": hit_stats,
-        },
-        "cache_miss": {
-            "trials": cache_miss_results,
-            "stats": miss_stats,
-        },
-        "ttft_degradation_pct": ttft_degradation,
-    }
+    # ---- Write results CSV ----
+    results_file = f"results/results_phase3b_a{CONTEXT_SIZE_A}_b{CONTEXT_SIZE_B}.csv"
+    write_results_csv(results_file, csv_rows)
+    print(f"\nResults saved to {results_file}")
 
-    outfile = f"results_phase3b_a{CONTEXT_SIZE_A}_b{CONTEXT_SIZE_B}.json"
-    with open(outfile, "w") as f:
-        json.dump(output, f, indent=2)
-    print(f"\nResults saved to {outfile}")
+    # ---- Write prompts CSV ----
+    prompts_file = f"prompts/prompts_phase3b_a{CONTEXT_SIZE_A}_b{CONTEXT_SIZE_B}.csv"
+    prompts_rows = [
+        {
+            "prompt_name": "warmup",
+            "token_count": warmup_token_count,
+            "prompt_text": warmup_prompt,
+            "sample_output": sample_warmup_output,
+        },
+        {
+            "prompt_name": "hit",
+            "token_count": hit_token_count,
+            "prompt_text": hit_prompt,
+            "sample_output": sample_hit_output,
+        },
+        {
+            "prompt_name": "miss",
+            "token_count": miss_token_count,
+            "prompt_text": miss_prompt,
+            "sample_output": sample_miss_output,
+        },
+    ]
+    write_prompts_csv(prompts_file, prompts_rows)
+    print(f"Prompts saved to {prompts_file}")
 
 
 if __name__ == "__main__":
