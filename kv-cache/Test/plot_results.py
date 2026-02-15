@@ -114,7 +114,7 @@ def discover_results():
         except (FileNotFoundError, json.JSONDecodeError):
             pass
 
-    configs = {}  # key: (a_size, b_size) -> {"phase1": ..., "phase2": ..., "phase3a": ..., "phase3b": ...}
+    configs = {}  # key: (a_size, b_size) -> {"phase1": ..., "phase2": ..., "phase3a": ..., "phase3b": ..., "phase3b_trivia": ...}
 
     for path in json_files:
         # Skip any phase3b JSON files (we use CSV now)
@@ -130,7 +130,7 @@ def discover_results():
         b = data["config"]["context_size_b"]
         key = (a, b)
         if key not in configs:
-            configs[key] = {"phase1": None, "phase2": None, "phase3a": None, "phase3b": None}
+            configs[key] = {"phase1": None, "phase2": None, "phase3a": None, "phase3b": None, "phase3b_trivia": None}
 
         phase_str = data["phase"]
         if "phase3a" in phase_str:
@@ -150,9 +150,22 @@ def discover_results():
         b = data["config"]["context_size_b"]
         key = (a, b)
         if key not in configs:
-            configs[key] = {"phase1": None, "phase2": None, "phase3a": None, "phase3b": None}
+            configs[key] = {"phase1": None, "phase2": None, "phase3a": None, "phase3b": None, "phase3b_trivia": None}
         configs[key]["phase3b"] = data
         print(f"Loaded: {path}  (A={a}, B={b}, phase3b)")
+
+    # --- CSV files (phase 3b trivia) ---
+    trivia_csv_files = sorted(glob.glob("results/results_phase3b_trivia_a*_b*.csv"))
+    for path in trivia_csv_files:
+        data = _load_phase3b_csv(path)
+        data["phase"] = "phase3b_trivia"
+        a = data["config"]["context_size_a"]
+        b = data["config"]["context_size_b"]
+        key = (a, b)
+        if key not in configs:
+            configs[key] = {"phase1": None, "phase2": None, "phase3a": None, "phase3b": None, "phase3b_trivia": None}
+        configs[key]["phase3b_trivia"] = data
+        print(f"Loaded: {path}  (A={a}, B={b}, phase3b_trivia)")
 
     return configs
 
@@ -389,6 +402,8 @@ def main():
                "plots/experiment1_all_configs_phase3a.png")
     plot_phase(configs, "phase3b", "Phase 3b — llama.cpp Python",
                "plots/experiment1_all_configs_phase3b.png")
+    plot_phase(configs, "phase3b_trivia", "Phase 3b Trivia — llama.cpp Python",
+               "plots/experiment1_all_configs_phase3b_trivia.png")
     print("\nDone.")
 
 
