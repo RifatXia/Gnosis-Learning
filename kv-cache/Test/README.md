@@ -2,6 +2,17 @@
 
 Measures the performance cost of KV cache invalidation when context is removed from a multi-turn conversation. Uses llama-cpp-python's direct API with a GGUF model to isolate cache behavior without HTTP overhead.
 
+## Key Metrics
+
+| Metric | What it measures | How it's measured |
+|--------|-----------------|-------------------|
+| **TTFT** (Time to First Token) | How long the model takes to process the prompt and produce the first output token. This is dominated by the **prefill** phase — the forward pass over all prompt tokens to build the KV cache. On a cache hit, most of this work is skipped. | Wall-clock time of a `llm(prompt, max_tokens=1)` call. The single decode step is ~constant, so the hit vs miss delta isolates the prefill cost. |
+| **Warmup Time** | How long it takes to populate the KV cache with the `[A, B]` prefix before each trial. Should be roughly constant across trials since we always clear and re-warm from scratch. | Wall-clock time of `llm(warmup_prompt, max_tokens=6)` after `clear_kv_cache()`. |
+| **Total Time** | End-to-end time for a full generation (prefill + all decode steps). Includes both the prompt processing and 50 token generation. | Wall-clock time of `llm(prompt, max_tokens=50)`. |
+| **Throughput** | Token generation speed during decoding. Should be roughly the same for hit and miss — once the KV cache is built (regardless of how), decoding speed depends on model size and GPU, not cache state. | `completion_tokens / (total_time_ms / 1000)` — tokens per second. |
+| **Completion Tokens** | How many tokens the model actually generated. Ideally equals `max_tokens` (50), but may be less if the model produces an EOS token early. | Reported by `llm()` in `usage.completion_tokens`. |
+| **Finish Reason** | Why generation stopped. `length` means it hit the `max_tokens` limit (expected). `stop` means the model generated an EOS/EOG token before reaching the limit — this makes throughput measurements inconsistent across trials. | Reported by `llm()` in `choices[0].finish_reason`. |
+
 ## Hypothesis
 
 When a shared prefix changes (context A removed), the KV cache cannot reuse previously computed attention states, forcing full recomputation of the remaining context. This should produce measurably higher TTFT compared to a cache-hit scenario where the full prefix is preserved.
