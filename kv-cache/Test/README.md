@@ -1,131 +1,140 @@
-# Experiment 1: Prefix Cache Invalidation Cost
+# KV Cache Prefix Invalidation Experiment
 
-Measures the performance cost of KV cache invalidation when context is removed from a multi-turn conversation served by vLLM with automatic prefix caching (APC) enabled.
+Measures the performance cost of KV cache invalidation when context is removed from a multi-turn conversation. Uses llama-cpp-python's direct API with a GGUF model to isolate cache behavior without HTTP overhead.
 
 ## Hypothesis
 
-When a prefix changes (context A removed), vLLM's radix-tree APC cannot reuse cached KV blocks, forcing full recomputation. This should produce measurably higher TTFT compared to a cache-hit scenario where the full prefix is preserved.
+When a shared prefix changes (context A removed), the KV cache cannot reuse previously computed attention states, forcing full recomputation of the remaining context. This should produce measurably higher TTFT compared to a cache-hit scenario where the full prefix is preserved.
 
 ## Setup
 
 | Component | Value |
 |-----------|-------|
-| Model | `facebook/opt-125m` (~250 MB) |
+| Model | GPT-2 (GGUF format, ~500 MB) |
 | GPU | NVIDIA GeForce GTX 1650 (4 GB VRAM) |
-| vLLM | 0.6.3.post1 with `--enable-prefix-caching` |
-| Context A | ~512 tokens (removable block) |
-| Context B | ~256 tokens (retained block) |
-| Output | 50 tokens max |
-| Trials | 10 measured + 1 warmup |
+| Runtime | llama-cpp-python (direct API, no HTTP server) |
+| Context window | 2048 tokens |
+| Output | 50 tokens max per generation |
+| Trials | 10 per condition (20 warmups total) |
 
 ## Experiment Design
 
-Each trial follows the same pattern:
+Each trial follows this flow:
 
-1. **Warm cache** — send `[A, B]` prompt with `max_tokens=1` to populate APC
-2. **Wait 500 ms** — let cache state settle
-3. **Measure query** — timed request with the test prompt
+```
+clear_kv_cache(llm)                     # reset state + clear GPU cache
+warmup [A, B] with 6 tokens            # populate KV cache with prefix
+sleep 500ms                             # let GPU settle
+measure TTFT (1-token generation)       # time to first token
+sleep 500ms
+measure throughput (50-token generation) # generation speed
+```
 
-Two conditions are compared:
+Two conditions are compared back-to-back:
 
-- **T2 (Cache Hit)** — query uses full `[A, B, Q]` prefix, matching the warmed cache
-- **T3 (Cache Miss)** — query uses `[B, Q]` only (A removed), invalidating the prefix
+- **Cache Hit** — query uses full `[A, B, Q]` prefix (matches the warmed cache)
+- **Cache Miss** — query uses `[B, Q]` only (A removed, prefix changed)
 
-### Phase 1: HTTP Streaming API
+### Cache Clearing
 
-Uses vLLM's OpenAI-compatible `/v1/chat/completions` endpoint with SSE streaming. TTFT is measured as the wall-clock time from request send to first content token received.
+The KV cache is fully cleared between every trial using two calls:
 
-### Phase 2: Direct Python API
+```python
+llm.reset()                # reset n_tokens counter to 0
+llm._ctx.kv_cache_clear()  # actually clear KV cache data from GPU
+```
 
-Uses vLLM's `LLM` class directly (no HTTP server). TTFT is measured as the wall-clock time for a 1-token generation call (`prefill + 1 decode step`). Since the single decode step is constant across conditions, the T2 vs T3 delta isolates the cache effect.
+`llm.reset()` alone only resets the token counter — it does **not** clear the cached KV data. Both calls are required.
+
+### EOS Handling
+
+GPT-2's EOS token (id 50256) can fire at any point during generation, causing `completion_tokens < max_tokens`. The experiment logs `completion_tokens` and `finish_reason` for every trial and warns if any trial stops early due to EOS.
+
+### Context Size Configurations
+
+Three configurations are tested, keeping A + B = 768 tokens total:
+
+| Config | Context A (removable) | Context B (retained) |
+|--------|----------------------|---------------------|
+| 1 | 512 tokens | 256 tokens |
+| 2 | 384 tokens | 384 tokens |
+| 3 | 256 tokens | 512 tokens |
+
+Larger B means more context must be reprocessed on a cache miss, so TTFT degradation scales with B.
 
 ## File Structure
 
 ```
-KV Cache/Test/
-├── pyproject.toml            # uv project config + dependencies
-├── phase1_server.sh          # Launches vLLM HTTP server with APC
-├── phase1_experiment.py      # Phase 1 experiment → results_phase1.json
-├── phase2_experiment.py      # Phase 2 experiment → results_phase2.json
-├── plot_results.py           # Reads JSON results, produces PNG plots
-├── results_phase1.json       # Phase 1 raw data + statistics
-├── results_phase2.json       # Phase 2 raw data + statistics
-├── experiment1_results.png   # 2×2 grid: TTFT + throughput per phase
-└── experiment1_phase_comparison.png  # Grouped bars across all conditions
+kv-cache/Test/
+├── pyproject.toml              # uv project config + dependencies
+├── phase3b_experiment.py       # Main experiment script
+├── plot_results.py             # Reads CSV results, produces PNG plots
+├── results/                    # Per-trial metrics (CSV)
+│   ├── results_phase3b_a512_b256.csv
+│   ├── results_phase3b_a384_b384.csv
+│   └── results_phase3b_a256_b512.csv
+├── prompts/                    # Prompt text, token counts, sample outputs (CSV)
+│   ├── prompts_phase3b_a512_b256.csv
+│   ├── prompts_phase3b_a384_b384.csv
+│   └── prompts_phase3b_a256_b512.csv
+└── plots/                      # Generated visualizations
+    └── experiment1_all_configs_phase3b.png
 ```
 
-## Running the Experiments
-
-### Prerequisites
+## Running the Experiment
 
 ```bash
-# Install dependencies (from this directory)
+# Install dependencies
 uv sync
+
+# Run all three configurations
+.venv/bin/python phase3b_experiment.py --size-a 512 --size-b 256
+.venv/bin/python phase3b_experiment.py --size-a 384 --size-b 384
+.venv/bin/python phase3b_experiment.py --size-a 256 --size-b 512
+
+# Generate plots
+.venv/bin/python plot_results.py
 ```
 
-### Phase 1: HTTP API
+## Output Format
 
-```bash
-# Terminal 1 — start the vLLM server
-bash phase1_server.sh
+### Results CSV (`results/results_phase3b_a{A}_b{B}.csv`)
 
-# Terminal 2 — once the server is ready, run the experiment
-uv run python phase1_experiment.py
+20 rows (10 hit + 10 miss), written once at the end with `flush()` + `os.fsync()`:
 
-# Stop the server when done (Ctrl+C in Terminal 1)
-```
+| Column | Description |
+|--------|-------------|
+| `trial` | Trial number (1-10) |
+| `condition` | `hit` or `miss` |
+| `warmup_time_ms` | Time to warm the [A,B] prefix cache |
+| `ttft_ms` | Time to first token (1-token generation) |
+| `total_time_ms` | Total time for 50-token generation |
+| `throughput_tok_s` | Tokens per second during generation |
+| `prompt_tokens` | Number of prompt tokens (from tokenizer) |
+| `completion_tokens` | Actual tokens generated (may be < 50 if EOS hit) |
+| `finish_reason` | `length` (hit max_tokens) or `stop` (EOS hit early) |
 
-### Phase 2: Python API
+### Prompts CSV (`prompts/prompts_phase3b_a{A}_b{B}.csv`)
 
-```bash
-# No server needed — runs standalone
-uv run python phase2_experiment.py
-```
+3 rows (warmup, hit, miss):
 
-### Generate Plots
+| Column | Description |
+|--------|-------------|
+| `prompt_name` | `warmup`, `hit`, or `miss` |
+| `token_count` | Exact token count from `llm.tokenize()` |
+| `prompt_text` | Full prompt text sent to the model |
+| `sample_output` | Generated text from the first trial |
 
-```bash
-# Reads results_phase1.json and results_phase2.json
-uv run python plot_results.py
-```
+## Results
 
-## Output Schema
+### TTFT Degradation by Configuration
 
-Both phases produce JSON with the same structure:
+| Config (A/B) | Cache Hit TTFT | Cache Miss TTFT | Degradation |
+|-------------|---------------|----------------|-------------|
+| 512 / 256 | ~28 ms | ~150 ms | +434% |
+| 384 / 384 | ~29 ms | ~221 ms | +672% |
+| 256 / 512 | ~28 ms | ~281 ms | +906% |
 
-```json
-{
-  "phase": "phase1_http_api | phase2_python_api",
-  "model": "facebook/opt-125m",
-  "timestamp": "...",
-  "config": {
-    "context_size_a": 512,
-    "context_size_b": 256,
-    "max_output_tokens": 50,
-    "num_trials": 10,
-    "warmup_trials": 1
-  },
-  "cache_hit": {
-    "trials": [{ "ttft_ms": ..., "total_time_ms": ..., "throughput": ..., "prompt_tokens": ..., "completion_tokens": ... }],
-    "stats": { "ttft_mean": ..., "ttft_median": ..., "ttft_stdev": ..., "throughput_mean": ..., "throughput_stdev": ..., "prompt_tokens": ... }
-  },
-  "cache_miss": { "trials": [...], "stats": {...} },
-  "ttft_degradation_pct": ...
-}
-```
+Cache miss TTFT scales linearly with the size of context B (the part that must be reprocessed). Cache hit TTFT stays constant (~28 ms) regardless of configuration since the entire prefix is already cached.
 
-## Plots
-
-**`experiment1_results.png`** — 2×2 grid showing TTFT and throughput for each phase separately, with error bars (stdev) and degradation % annotations.
-
-**`experiment1_phase_comparison.png`** — Side-by-side grouped bars for all 4 conditions (P1-hit, P1-miss, P2-hit, P2-miss), highlighting HTTP overhead between phases.
-
-## Server Configuration
-
-The vLLM server is launched with conservative settings for 4 GB VRAM:
-
-- `--gpu-memory-utilization 0.7` — leaves headroom for CUDA overhead
-- `--max-model-len 1024` — limits KV cache allocation
-- `--enforce-eager` — disables CUDA graphs to save VRAM
-- `--swap-space 0` — no CPU swap (unnecessary for this model size)
-- Custom chat template concatenates message contents (OPT-125m has no native chat format)
+Generation throughput (~210 tok/s) is unaffected by cache state — caching only impacts the prefill phase, not token-by-token decoding.
